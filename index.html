@@ -84,6 +84,12 @@
             box-shadow: 0 6px 20px rgba(66, 133, 244, 0.4);
         }
         
+        .auth-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         .main-content {
             padding: 30px;
             display: none;
@@ -234,6 +240,11 @@
             color: #e74c3c;
         }
         
+        .status-loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
         .notification {
             position: fixed;
             top: 20px;
@@ -326,12 +337,13 @@
         <div class="auth-section" id="authSection">
             <h2>🔐 Połączenie z Google Sheets</h2>
             <p style="margin: 15px 0; color: #666;">Autoryzuj aplikację, aby móc zapisywać dane w Twoich arkuszach Google</p>
-            <button class="auth-button" onclick="authorizeGapi()">
+            <button class="auth-button" id="authButton" onclick="authorizeGapi()">
                 📊 Połącz z Google Sheets
             </button>
             <div style="margin-top: 15px;">
-                Status: <span class="status-indicator status-disconnected" id="connectionStatus">Niepołączono</span>
+                Status: <span class="status-indicator status-loading" id="connectionStatus">Ładowanie...</span>
             </div>
+            <div id="debugInfo" style="margin-top: 10px; font-size: 12px; color: #666;"></div>
         </div>
         
         <!-- GŁÓWNA ZAWARTOŚĆ -->
@@ -476,8 +488,8 @@
         // KONFIGURACJA GOOGLE API
         // =============================================================================
         
-        const API_KEY = 'AIzaSyC0zn6Bm1cwF9doJbwhRZUfOB-UXG9PMy0'; // Zastąp swoim kluczem API
-        const CLIENT_ID = '303386809495-dhhsia6c41i5hoj7h5ofso9g9obdbmce.apps.googleusercontent.com'; // Zastąp swoim Client ID
+        const API_KEY = 'AIzaSyC0zn6Bm1cwF9doJbwhRZUfOB-UXG9PMy0';
+        const CLIENT_ID = '303386809495-dhhsia6c41i5hoj7h5ofso9g9obdbmce.apps.googleusercontent.com';
         const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4';
         const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
         
@@ -491,31 +503,64 @@
         // =============================================================================
         
         function gapiLoaded() {
-            gapi.load('client', initializeGapiClient);
+            console.log('📊 GAPI script załadowany, inicjalizuję...');
+            try {
+                window.gapi.load('client', initializeGapiClient);
+            } catch (error) {
+                console.error('❌ Błąd ładowania GAPI client:', error);
+                updateDebugInfo('Błąd ładowania GAPI client');
+            }
         }
         
         async function initializeGapiClient() {
-            await gapi.client.init({
-                apiKey: API_KEY,
-                discoveryDocs: [DISCOVERY_DOC],
-            });
-            gapiInited = true;
-            maybeEnableButtons();
+            console.log('🔧 Inicjalizuję GAPI client...');
+            try {
+                await window.gapi.client.init({
+                    apiKey: API_KEY,
+                    discoveryDocs: [DISCOVERY_DOC],
+                });
+                gapiInited = true;
+                console.log('✅ GAPI client zainicjalizowany');
+                updateDebugInfo('GAPI client: OK');
+                maybeEnableButtons();
+            } catch (error) {
+                console.error('❌ Błąd inicjalizacji GAPI client:', error);
+                updateDebugInfo('Błąd inicjalizacji GAPI: ' + error.message);
+            }
         }
         
         function gisLoaded() {
-            tokenClient = google.accounts.oauth2.initTokenClient({
-                client_id: CLIENT_ID,
-                scope: SCOPES,
-                callback: '',
-            });
-            gisInited = true;
-            maybeEnableButtons();
+            console.log('🔑 GIS script załadowany, inicjalizuję...');
+            try {
+                tokenClient = window.google.accounts.oauth2.initTokenClient({
+                    client_id: CLIENT_ID,
+                    scope: SCOPES,
+                    callback: '',
+                });
+                gisInited = true;
+                console.log('✅ GIS zainicjalizowany');
+                updateDebugInfo('GIS: OK');
+                maybeEnableButtons();
+            } catch (error) {
+                console.error('❌ Błąd inicjalizacji GIS:', error);
+                updateDebugInfo('Błąd inicjalizacji GIS: ' + error.message);
+            }
         }
         
         function maybeEnableButtons() {
+            console.log(`📋 Status: GAPI=${gapiInited}, GIS=${gisInited}`);
             if (gapiInited && gisInited) {
-                console.log('Google API gotowe');
+                console.log('🎉 Google API gotowe!');
+                updateConnectionStatus('ready');
+                updateDebugInfo('Google API gotowe do użycia');
+                document.getElementById('authButton').disabled = false;
+            }
+        }
+        
+        function updateDebugInfo(message) {
+            const debugElement = document.getElementById('debugInfo');
+            if (debugElement) {
+                debugElement.textContent = message;
             }
         }
         
@@ -524,12 +569,22 @@
         // =============================================================================
         
         function authorizeGapi() {
+            console.log('🔐 Rozpoczynam autoryzację...');
+            
+            if (!gapiInited || !gisInited) {
+                showNotification('Google API nie jest jeszcze gotowe. Spróbuj za chwilę.', 'error');
+                return;
+            }
+            
             tokenClient.callback = async (resp) => {
                 if (resp.error !== undefined) {
-                    throw (resp);
+                    console.error('❌ Błąd autoryzacji:', resp);
+                    showNotification('Błąd autoryzacji: ' + resp.error, 'error');
+                    return;
                 }
                 
-                updateConnectionStatus(true);
+                console.log('✅ Autoryzacja udana!');
+                updateConnectionStatus('connected');
                 showNotification('Połączono z Google Sheets!', 'success');
                 
                 document.getElementById('authSection').style.display = 'none';
@@ -539,21 +594,42 @@
                 document.getElementById('expenseDate').value = new Date().toISOString().split('T')[0];
             };
             
-            if (gapi.client.getToken() === null) {
-                tokenClient.requestAccessToken({prompt: 'consent'});
-            } else {
-                tokenClient.requestAccessToken({prompt: ''});
+            try {
+                if (window.gapi.client.getToken() === null) {
+                    tokenClient.requestAccessToken({prompt: 'consent'});
+                } else {
+                    tokenClient.requestAccessToken({prompt: ''});
+                }
+            } catch (error) {
+                console.error('❌ Błąd requestAccessToken:', error);
+                showNotification('Błąd podczas autoryzacji: ' + error.message, 'error');
             }
         }
         
-        function updateConnectionStatus(connected) {
+        function updateConnectionStatus(status) {
             const statusElement = document.getElementById('connectionStatus');
-            if (connected) {
-                statusElement.textContent = 'Połączono';
-                statusElement.className = 'status-indicator status-connected';
-            } else {
-                statusElement.textContent = 'Niepołączono';
-                statusElement.className = 'status-indicator status-disconnected';
+            if (!statusElement) return;
+            
+            switch(status) {
+                case 'loading':
+                    statusElement.textContent = 'Ładowanie...';
+                    statusElement.className = 'status-indicator status-loading';
+                    break;
+                case 'ready':
+                    statusElement.textContent = 'Gotowe';
+                    statusElement.className = 'status-indicator status-connected';
+                    break;
+                case 'connected':
+                    statusElement.textContent = 'Połączono';
+                    statusElement.className = 'status-indicator status-connected';
+                    break;
+                case 'error':
+                    statusElement.textContent = 'Błąd';
+                    statusElement.className = 'status-indicator status-disconnected';
+                    break;
+                default:
+                    statusElement.textContent = 'Niepołączono';
+                    statusElement.className = 'status-indicator status-disconnected';
             }
         }
         
@@ -593,7 +669,7 @@
             
             try {
                 // Znajdź następny wolny wiersz
-                const response = await gapi.client.sheets.spreadsheets.values.get({
+                const response = await window.gapi.client.sheets.spreadsheets.values.get({
                     spreadsheetId: spreadsheetId,
                     range: `${targetSheet}!A:A`,
                 });
@@ -621,7 +697,7 @@
                 ]];
                 
                 // Wstaw dane
-                await gapi.client.sheets.spreadsheets.values.update({
+                await window.gapi.client.sheets.spreadsheets.values.update({
                     spreadsheetId: spreadsheetId,
                     range: `${targetSheet}!A${nextRow}:L${nextRow}`,
                     valueInputOption: 'USER_ENTERED',
@@ -636,7 +712,7 @@
                 
             } catch (error) {
                 console.error('Błąd dodawania wydatku:', error);
-                showNotification('Błąd podczas dodawania wydatku!', 'error');
+                showNotification('Błąd podczas dodawania wydatku: ' + error.message, 'error');
             }
             
             showLoading(false);
@@ -654,7 +730,7 @@
             
             try {
                 // Pobierz podsumowania z arkusza głównego
-                const summaryResponse = await gapi.client.sheets.spreadsheets.values.get({
+                const summaryResponse = await window.gapi.client.sheets.spreadsheets.values.get({
                     spreadsheetId: spreadsheetId,
                     range: 'Kosztorys Główny!H11:H14',
                 });
@@ -677,7 +753,7 @@
                 
             } catch (error) {
                 console.error('Błąd ładowania podsumowania:', error);
-                showNotification('Błąd podczas ładowania danych!', 'error');
+                showNotification('Błąd podczas ładowania danych: ' + error.message, 'error');
             }
             
             showLoading(false);
@@ -687,7 +763,7 @@
             const targetSheet = document.getElementById('targetSheet').value;
             
             try {
-                const response = await gapi.client.sheets.spreadsheets.values.get({
+                const response = await window.gapi.client.sheets.spreadsheets.values.get({
                     spreadsheetId: spreadsheetId,
                     range: `${targetSheet}!A8:L1000`,
                 });
@@ -767,7 +843,7 @@
             
             setTimeout(() => {
                 notification.classList.remove('show');
-            }, 3000);
+            }, 4000);
         }
         
         function formatCurrency(value) {
@@ -785,59 +861,97 @@
         }
         
         // =============================================================================
-        // INICJALIZACJA
+        // INICJALIZACJA - NOWA ULEPSZONA WERSJA
         // =============================================================================
         
-        // Załaduj API Google
         function loadGoogleAPIs() {
+            console.log('🚀 Rozpoczynam ładowanie Google APIs...');
+            updateConnectionStatus('loading');
+            updateDebugInfo('Ładowanie Google API...');
+            
+            // Załaduj GAPI z timeout
             const gapiScript = document.createElement('script');
             gapiScript.src = 'https://apis.google.com/js/api.js';
-            gapiScript.onload = gapiLoaded;
+            gapiScript.async = true;
+            gapiScript.defer = true;
+            
+            gapiScript.onload = () => {
+                console.log('📦 GAPI script załadowany');
+                updateDebugInfo('GAPI script: załadowany');
+                gapiLoaded();
+            };
+            
+            gapiScript.onerror = () => {
+                console.error('❌ Błąd ładowania GAPI script');
+                updateConnectionStatus('error');
+                updateDebugInfo('Błąd ładowania GAPI script');
+                showNotification('Błąd ładowania Google API. Sprawdź połączenie internetowe.', 'error');
+            };
+            
             document.head.appendChild(gapiScript);
             
+            // Załaduj GIS z timeout
             const gisScript = document.createElement('script');
             gisScript.src = 'https://accounts.google.com/gsi/client';
-            gisScript.onload = gisLoaded;
+            gisScript.async = true;
+            gisScript.defer = true;
+            
+            gisScript.onload = () => {
+                console.log('🔑 GIS script załadowany');
+                updateDebugInfo('GIS script: załadowany');
+                gisLoaded();
+            };
+            
+            gisScript.onerror = () => {
+                console.error('❌ Błąd ładowania GIS script');
+                updateConnectionStatus('error');
+                updateDebugInfo('Błąd ładowania GIS script');
+                showNotification('Błąd ładowania Google Identity Services.', 'error');
+            };
+            
             document.head.appendChild(gisScript);
+            
+            // Timeout fallback
+            setTimeout(() => {
+                if (!gapiInited || !gisInited) {
+                    console.warn('⚠️ Timeout ładowania Google API');
+                    updateConnectionStatus('error');
+                    updateDebugInfo('Timeout ładowania Google API - spróbuj odświeżyć stronę');
+                    showNotification('Timeout ładowania Google API. Odśwież stronę.', 'error');
+                }
+            }, 10000);
         }
         
         // Uruchom po załadowaniu strony
         document.addEventListener('DOMContentLoaded', () => {
-            // Symulacja dla demo (usuń w produkcji)
-            if (API_KEY === 'YOUR_API_KEY') {
-                document.getElementById('authSection').innerHTML = `
-                    <h2>🚀 TRYB DEMO</h2>
-                    <p style="margin: 15px 0; color: #666;">
-                        To jest wersja demonstracyjna. Aby używać z prawdziwymi arkuszami Google:<br>
-                        1. Zdobądź API Key i Client ID z Google Cloud Console<br>
-                        2. Zamień YOUR_API_KEY i YOUR_CLIENT_ID w kodzie<br>
-                        3. Włącz Google Sheets API w swoim projekcie
-                    </p>
-                    <button class="auth-button" onclick="enableDemoMode()">
-                        🧪 Włącz Tryb Demo
-                    </button>
-                `;
-            } else {
-                loadGoogleAPIs();
+            console.log('📄 Dokument załadowany');
+            updateDebugInfo('Inicjalizacja...');
+            
+            // Wyłącz przycisk na początku
+            const authButton = document.getElementById('authButton');
+            if (authButton) {
+                authButton.disabled = true;
+            }
+            
+            // Załaduj Google APIs
+            loadGoogleAPIs();
+        });
+        
+        // Obsługa błędów globalnych
+        window.addEventListener('error', (event) => {
+            console.error('🔥 Globalny błąd JavaScript:', event.error);
+            if (event.error && event.error.toString().includes('gapi')) {
+                updateDebugInfo('Błąd GAPI: ' + event.error.message);
             }
         });
         
-        // Demo mode (usuń w produkcji)
-        function enableDemoMode() {
-            document.getElementById('authSection').style.display = 'none';
-            document.getElementById('mainContent').style.display = 'block';
-            document.getElementById('expenseDate').value = new Date().toISOString().split('T')[0];
-            
-            // Przykładowe dane
-            updateSummaryCards({
-                robocizna: 15000,
-                materialy: 8500,
-                sumaNetto: 23500,
-                sumaBrutto: 28905
-            });
-            
-            showNotification('Tryb demo włączony!', 'success');
-        }
+        // Obsługa niezłapanych promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('🔥 Nieobsłużone odrzucenie Promise:', event.reason);
+            if (event.reason && event.reason.toString().includes('gapi')) {
+                updateDebugInfo('Błąd Promise GAPI: ' + event.reason);
+            }
+        });
     </script>
 </body>
 </html>
